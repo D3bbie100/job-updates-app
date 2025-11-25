@@ -16,7 +16,7 @@ app.use(bodyParser.json());
 app.use(express.static("."));
 
 app.get("/", (req, res) => {
-  res.sendFile(path.join(__dirname, "public/index.html"));
+  res.sendFile(path.join(__dirname, "index.html"));
 });
 
 app.post("/subscribe", async (req, res) => {
