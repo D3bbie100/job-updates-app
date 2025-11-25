@@ -80,7 +80,7 @@ app.post("/subscribe", async (req, res) => {
       BusinessShortCode: shortcode,
       Password: password,
       Timestamp: timestamp,
-      TransactionType: "CustomerPayBillOnline",
+      TransactionType: "CustomerBuyGoodsOnline",
       Amount: amount,
       PartyA: phone,
       PartyB: shortcode,
