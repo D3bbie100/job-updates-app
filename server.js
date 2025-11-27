@@ -73,22 +73,28 @@ app.post("/subscribe", async (req, res) => {
     const token = await getMpesaToken();
 
     // Timestamp format YYYYMMDDHHmmss
-    const timestamp = new Date().toISOString().replace(/[^0-9]/g, "").slice(0, 14);
-    const password = Buffer.from(shortcode + passkey + timestamp).toString("base64");
+const timestamp = new Date()
+  .toISOString()
+  .replace(/[^0-9]/g, "")
+  .slice(0, 14);
 
-    const payload = {
-      BusinessShortCode: shortcode,
-      Password: password,
-      Timestamp: timestamp,
-      TransactionType: "CustomerBuyGoodsOnline",
-      Amount: amount,
-      PartyA: phone,
-      PartyB: shortcode,
-      PhoneNumber: phone,
-      CallBackURL: `${callbackBase}/payment-confirmed`,
-      AccountReference: accountRef,
-      TransactionDesc: `Subscription (${industry})`,
-    };
+const password = Buffer.from(
+  shortcode + passkey + timestamp
+).toString("base64");
+
+const payload = {
+  BusinessShortCode: shortcode,
+  Password: password,
+  Timestamp: timestamp,
+  TransactionType: "CustomerBuyGoodsOnline",
+  Amount: amount,
+  PartyA: phone,
+  PartyB: shortcode,
+  PhoneNumber: phone,
+  CallBackURL: `${callbackBase}/payment-confirmed`,
+  AccountReference: accountRef,
+  TransactionDesc: `Subscription (${industry})`,
+};
 
     console.log("STK push payload:", { ...payload, Password: "[HIDDEN]" });
 
