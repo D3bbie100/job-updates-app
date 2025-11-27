@@ -83,7 +83,7 @@ app.post("/subscribe", async (req, res) => {
       TransactionType: "CustomerBuyGoodsOnline",
       Amount: amount,
       PartyA: phone,
-      PartyB: shortcode,
+      PartyB: '6976785',
       PhoneNumber: phone,
       CallBackURL: `${callbackBase}/payment-confirmed`,
       AccountReference: accountRef,
