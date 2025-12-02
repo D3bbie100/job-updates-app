@@ -59,8 +59,6 @@ app.post("/subscribe", async (req, res) => {
     const accountRef = genRef();
     pending[accountRef] = { name, email, phone, industry, createdAt: Date.now() };
 
-    const amount = 100;
-
     // Daraja config
     const shortcode = process.env.MPESA_SHORTCODE;
     const passkey = process.env.MPESA_PASSKEY;
@@ -80,7 +78,7 @@ app.post("/subscribe", async (req, res) => {
       Password: password,
       Timestamp: timestamp,
       TransactionType: 'CustomerBuyGoodsOnline',
-      Amount: amount,
+      Amount: 100,
       PartyA: phone,
       PartyB: '6976785',
       PhoneNumber: phone,
