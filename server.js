@@ -1,18 +1,20 @@
 import dotenv from 'dotenv';
 import express from 'express';
 import axios from 'axios';
-import bodyParser from 'body-parser';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
 dotenv.config();
 
-// Needed to handle __dirname in ES modules
+// Fix __dirname in ES modules
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
-app.use(bodyParser.json());
+
+// Parse JSON
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 
 // Temporary storage
 const pendingPayments = new Map();
@@ -48,10 +50,15 @@ app.post('/stkpush', async (req, res) => {
       return res.status(400).json({ error: "Phone number required" });
     }
 
+    // Store user until payment callback
     pendingPayments.set(phone, { name, email, industry });
 
     const accessToken = await getAccessToken();
-    const timestamp = new Date().toISOString().replace(/[^0-9]/g, '').slice(0, 14);
+
+    const timestamp = new Date()
+      .toISOString()
+      .replace(/[^0-9]/g, '')
+      .slice(0, 14);
 
     const password = Buffer.from(
       process.env.MPESA_SHORTCODE + process.env.MPESA_PASSKEY + timestamp
@@ -64,7 +71,7 @@ app.post('/stkpush', async (req, res) => {
       TransactionType: 'CustomerBuyGoodsOnline',
       Amount: 100,
       PartyA: phone,
-      PartyB: '6976785',
+      PartyB: process.env.MPESA_SHORTCODE, // or your till/paybill
       PhoneNumber: phone,
       CallBackURL: process.env.MPESA_CALLBACK_URL,
       AccountReference: 'Payment',
@@ -74,11 +81,15 @@ app.post('/stkpush', async (req, res) => {
     const stkRes = await axios.post(
       'https://api.safaricom.co.ke/mpesa/stkpush/v1/processrequest',
       payload,
-      { headers: { Authorization: `Bearer ${accessToken}` } }
+      {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+        },
+      }
     );
 
-    res.json(stkRes.data);
-
+    res.json({ message: "STK push sent", data: stkRes.data });
   } catch (err) {
     console.error("STK Push Error:", err.response?.data || err.message);
     res.status(500).json({ error: 'STK Push failed' });
@@ -86,25 +97,21 @@ app.post('/stkpush', async (req, res) => {
 });
 
 // ===============================
-// 3. MAILERLITE FUNCTION
+// 3. MAILERLITE SUBSCRIBE
 // ===============================
 const addUserToMailerLite = async (email, name, industry, phone) => {
   return axios.post(
     'https://connect.mailerlite.com/api/subscribers',
     {
-      email: email,
-      fields: {
-        name: name,
-        phone: phone,
-        industry: industry
-      },
-      groups: [process.env.MAILERLITE_GROUP_ID]
+      email,
+      fields: { name, phone, industry },
+      groups: [process.env.MAILERLITE_GROUP_ID],
     },
     {
       headers: {
         Authorization: `Bearer ${process.env.MAILERLITE_API_KEY}`,
-        'Content-Type': 'application/json'
-      }
+        'Content-Type': 'application/json',
+      },
     }
   );
 };
@@ -113,11 +120,17 @@ const addUserToMailerLite = async (email, name, industry, phone) => {
 // 4. CALLBACK ROUTE
 // ===============================
 app.post('/callback', async (req, res) => {
-  const callback = req.body.Body.stkCallback;
+  console.log("Callback Received:", JSON.stringify(req.body, null, 2));
 
-  console.log("M-Pesa Callback:", JSON.stringify(callback, null, 2));
+  const callback = req.body?.Body?.stkCallback;
+
+  if (!callback) {
+    console.log("Invalid callback format");
+    return res.status(200).send("OK");
+  }
 
   const resultCode = callback.ResultCode;
+
   const phoneNumber =
     callback.CallbackMetadata?.Item?.find(i => i.Name === 'PhoneNumber')?.Value;
 
@@ -127,13 +140,17 @@ app.post('/callback', async (req, res) => {
   }
 
   if (resultCode === 0) {
-    console.log("Payment success for:", phoneNumber);
+    console.log("Payment success:", phoneNumber);
 
     const user = pendingPayments.get(phoneNumber);
-
     if (user) {
       try {
-        await addUserToMailerLite(user.email, user.name, user.industry, phoneNumber);
+        await addUserToMailerLite(
+          user.email,
+          user.name,
+          user.industry,
+          phoneNumber
+        );
         console.log("Added to MailerLite:", user.email);
       } catch (err) {
         console.log("MailerLite Error:", err.response?.data || err.message);
@@ -142,21 +159,21 @@ app.post('/callback', async (req, res) => {
       pendingPayments.delete(phoneNumber);
     }
   } else {
-    console.log("Payment failed for:", phoneNumber);
+    console.log("Payment failed:", phoneNumber);
   }
 
   res.status(200).send("OK");
 });
 
 // ===============================
-// 5. SERVE FRONTEND
+// 5. Serve frontend
 // ===============================
 app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'index.html'));
 });
 
 // ===============================
-// 6. START SERVER
+// 6. Start Server
 // ===============================
 app.listen(process.env.PORT || 3000, () => {
   console.log(`Server running on port ${process.env.PORT || 3000}`);
