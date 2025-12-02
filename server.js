@@ -62,7 +62,6 @@ app.post("/subscribe", async (req, res) => {
     // Daraja config
     const shortcode = process.env.MPESA_SHORTCODE;
     const passkey = process.env.MPESA_PASSKEY;
-    const callbackBase = process.env.MPESA_CALLBACK_BASE || "https://job-updates-app.onrender.com";
     if (!shortcode || !passkey) {
       return res.status(500).json({ message: "MPESA_SHORTCODE or MPESA_PASSKEY not set in environment" });
     }
@@ -83,7 +82,7 @@ app.post("/subscribe", async (req, res) => {
       PartyA: phone,
       PartyB: shortcode,
       PhoneNumber: phone,
-      CallBackURL: '${callbackBase}/payment-confirmed',
+      CallBackURL: process.env.MPESA_CALLBACK_URL,
       AccountReference: accountRef,
       TransactionDesc: 'Subscription (${industry})',
     };
