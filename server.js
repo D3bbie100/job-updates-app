@@ -74,13 +74,13 @@ app.post("/subscribe", async (req, res) => {
 
     // Timestamp format YYYYMMDDHHmmss
     const timestamp = new Date().toISOString().replace(/[^0-9]/g, "").slice(0, 14);
-    const password = Buffer.from(shortcode + passkey + timestamp).toString("base64");
+    const password = Buffer.from(shortcode + passkey + timestamp).toString('base64');
 
     const payload = {
       BusinessShortCode: shortcode,
       Password: password,
       Timestamp: timestamp,
-      TransactionType: "CustomerBuyGoodsOnline",
+      TransactionType: 'CustomerBuyGoodsOnline',
       Amount: amount,
       PartyA: phone,
       PartyB: '6976785',
