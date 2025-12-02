@@ -1,84 +1,62 @@
-import express from "express";
-import bodyParser from "body-parser";
-import fetch from "node-fetch";
-import dotenv from "dotenv";
-import path from "path";
-import { fileURLToPath } from "url";
-import crypto from "crypto";
+require('dotenv').config();
+const express = require('express');
+const axios = require('axios');
+const bodyParser = require('body-parser');
+const path = require('path');
 
-dotenv.config();
 const app = express();
-const PORT = process.env.PORT || 10000;
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
 app.use(bodyParser.json());
-app.use(express.static("."));
 
-// In-memory pending store (replace with DB in production)
-const pending = {}; // { reference: { name, email, phone, industry, createdAt } }
+// 🔹 Simple temporary storage (replace with DB in production)
+const pendingPayments = new Map();
 
-// Helper to generate short unique reference
-function genRef() {
-  return "REF-" + crypto.randomBytes(6).toString("hex");
-}
+// ===============================
+// 1. Generate Access Token
+// ===============================
+const getAccessToken = async () => {
+  const auth = Buffer.from(
+    `${process.env.MPESA_CONSUMER_KEY}:${process.env.MPESA_CONSUMER_SECRET}`
+  ).toString('base64');
 
-// Daraja: get access token
-async function getMpesaToken() {
-  const consumerKey = process.env.MPESA_CONSUMER_KEY;
-  const consumerSecret = process.env.MPESA_CONSUMER_SECRET;
-  if (!consumerKey || !consumerSecret) {
-    throw new Error("Missing MPESA_CONSUMER_KEY or MPESA_CONSUMER_SECRET in env");
-  }
-  const auth = Buffer.from(`${consumerKey}:${consumerSecret}`).toString("base64");
-  const url = process.env.MPESA_OAUTH_URL || "https://api.safaricom.co.ke/oauth/v1/generate?grant_type=client_credentials";
-  const res = await fetch(url, { headers: { Authorization: `Basic ${auth}` } });
-  if (!res.ok) {
-    const txt = await res.text();
-    throw new Error("Failed to get token: " + txt);
-  }
-  const data = await res.json();
-  return data.access_token;
-}
+  const res = await axios.get(
+    'https://api.safaricom.co.ke/oauth/v1/generate?grant_type=client_credentials',
+    {
+      headers: {
+        Authorization: `Basic ${auth}`,
+      },
+    }
+  );
 
-// Serve form (root index.html)
-app.get("/", (req, res) => {
-  res.sendFile(path.join(__dirname, "index.html"));
-});
+  return res.data.access_token;
+};
 
-// POST /subscribe -> triggers STK push (Daraja)
-app.post("/subscribe", async (req, res) => {
+// ===============================
+// 2. STK PUSH ROUTE
+// ===============================
+app.post('/stkpush', async (req, res) => {
   try {
     const { name, email, phone, industry } = req.body;
-    if (!name || !email || !phone || !industry) {
-      return res.status(400).json({ message: "Missing required fields" });
+
+    if (!phone) {
+      return res.status(400).json({ error: "Phone number required" });
     }
 
-    // Generate ref and store pending
-    const accountRef = genRef();
-    pending[accountRef] = { name, email, phone, industry, createdAt: Date.now() };
+    // 🔹 Store subscriber details temporarily
+    pendingPayments.set(phone, { name, email, industry });
 
-    // Daraja config
-    const shortcode = process.env.MPESA_SHORTCODE;
-    const passkey = process.env.MPESA_PASSKEY;
-    if (!shortcode || !passkey) {
-      return res.status(500).json({ message: "MPESA_SHORTCODE or MPESA_PASSKEY not set in environment" });
-    }
+    const accessToken = await getAccessToken();
+    const timestamp = new Date().toISOString().replace(/[^0-9]/g, '').slice(0, 14);
 
-    // Get access token
-    const token = await getMpesaToken();
-
-    // Timestamp format YYYYMMDDHHmmss
-    const timestamp = new Date().toISOString().replace(/[^0-9]/g, "").slice(0, 14);
-    const password = Buffer.from(shortcode + passkey + timestamp).toString('base64');
+    const password = Buffer.from(
+      process.env.MPESA_SHORTCODE + process.env.MPESA_PASSKEY + timestamp
+    ).toString('base64');
 
     const payload = {
-      BusinessShortCode: shortcode,
+      BusinessShortCode: process.env.MPESA_SHORTCODE,
       Password: password,
       Timestamp: timestamp,
       TransactionType: 'CustomerBuyGoodsOnline',
-      Amount: 100,
+      Amount: 10,
       PartyA: phone,
       PartyB: '6976785',
       PhoneNumber: phone,
@@ -87,104 +65,97 @@ app.post("/subscribe", async (req, res) => {
       TransactionDesc: 'Payment',
     };
 
-    console.log("STK push payload:", { ...payload, Password: "[HIDDEN]" });
+    const stkRes = await axios.post(
+      'https://api.safaricom.co.ke/mpesa/stkpush/v1/processrequest',
+      payload,
+      { headers: { Authorization: `Bearer ${accessToken}` } }
+    );
 
-    const stkRes = await fetch(process.env.MPESA_STK_URL || "https://api.safaricom.co.ke/mpesa/stkpush/v1/processrequest", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(payload),
-    });
+    res.json(stkRes.data);
 
-    const stkData = await stkRes.json().catch(() => null);
-    console.log("STK response:", stkData);
-
-    return res.json({
-      status: "pending",
-      message: "M-PESA payment prompt sent to your phone. Confirm to complete subscription.",
-      reference: accountRef,
-      stk: stkData || null,
-    });
   } catch (err) {
-    console.error("Error /subscribe:", err);
-    return res.status(500).json({ message: "Failed to initiate payment", error: err.message });
+    console.error("❌ STK Push Error:", err.response?.data || err.message);
+    res.status(500).json({ error: 'STK Push failed' });
   }
 });
 
-// POST /payment-confirmed -> M-PESA callback
-app.post("/payment-confirmed", async (req, res) => {
-  try {
-    console.log("Payment callback received:", JSON.stringify(req.body).slice(0, 2000));
-    const body = req.body;
-    const stkCallback = body?.Body?.stkCallback;
-    if (!stkCallback) {
-      // Some providers may POST different payloads; acknowledge to avoid retries
-      return res.status(200).json({ result: "no-stk-callback-present" });
-    }
-
-    const resultCode = stkCallback.ResultCode;
-    const items = stkCallback?.CallbackMetadata?.Item || [];
-
-    const accountRefItem = items.find((it) => it.Name === "AccountReference");
-    const phoneItem = items.find((it) => it.Name === "PhoneNumber" || it.Name === "MSISDN");
-    const amountItem = items.find((it) => it.Name === "Amount");
-    const receiptItem = items.find((it) => it.Name === "MpesaReceiptNumber" || it.Name === "ReceiptNumber");
-
-    const accountRef = accountRefItem?.Value || stkCallback?.CheckoutRequestID || null;
-    const payerPhone = phoneItem?.Value || null;
-    const amount = amountItem?.Value || null;
-    const receipt = receiptItem?.Value || null;
-
-    if (resultCode === 0 && accountRef && pending[accountRef]) {
-      const entry = pending[accountRef];
-      const { name, email, industry } = entry;
-
-      const key = `MAILERLITE_GROUP_${industry.toUpperCase().replace(/[^A-Z0-9]/g, "_")}`;
-      const groupId = process.env[key] || process.env.MAILERLITE_DEFAULT_GROUP;
-
-      const mlPayload = {
-        email: email,
+// ===============================
+// 3. MAILERLITE FUNCTION
+// ===============================
+const addUserToMailerLite = async (email, name, industry, phone) => {
+  return axios.post(
+    'https://connect.mailerlite.com/api/subscribers',
+    {
+      email: email,
+      fields: {
         name: name,
-        fields: { phone: payerPhone || "" },
-      };
-      if (groupId) mlPayload.groups = [groupId];
+        phone: phone,
+        industry: industry
+      },
+      groups: [process.env.MAILERLITE_GROUP_ID]
+    },
+    {
+      headers: {
+        Authorization: `Bearer ${process.env.MAILERLITE_API_KEY}`,
+        'Content-Type': 'application/json'
+      }
+    }
+  );
+};
 
+// ===============================
+// 4. CALLBACK ROUTE
+// ===============================
+app.post('/callback', async (req, res) => {
+  const callback = req.body.Body.stkCallback;
+
+  console.log("📩 M-Pesa Callback:", JSON.stringify(callback, null, 2));
+
+  const resultCode = callback.ResultCode;
+
+  const phoneNumber = callback.CallbackMetadata?.Item?.find(i => i.Name === 'PhoneNumber')?.Value;
+
+  if (!phoneNumber) {
+    console.log("⚠️ No phone number in callback.");
+    return res.status(200).send("OK");
+  }
+
+  // =======================================
+  // 🔹 SUCCESSFUL PAYMENT
+  // =======================================
+  if (resultCode === 0) {
+    console.log("✅ Payment success for:", phoneNumber);
+
+    const user = pendingPayments.get(phoneNumber);
+
+    if (user) {
       try {
-        const mlRes = await fetch("https://connect.mailerlite.com/api/subscribers", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${process.env.MAILERLITE_API_KEY}`,
-          },
-          body: JSON.stringify(mlPayload),
-        });
-        const mlText = await mlRes.text();
-        console.log("MailerLite result:", mlRes.status, mlText);
-      } catch (e) {
-        console.error("MailerLite API error:", e);
+        await addUserToMailerLite(user.email, user.name, user.industry, phoneNumber);
+        console.log(`📧 Added to MailerLite: ${user.email}`);
+      } catch (err) {
+        console.log("❌ MailerLite Error:", err.response?.data || err.message);
       }
 
-      // Remove pending entry
-      delete pending[accountRef];
-
-      return res.status(200).json({ ResultCode: 0, ResultDesc: "Processed" });
+      pendingPayments.delete(phoneNumber); // cleanup
     }
-
-    console.warn("Callback not processed:", { resultCode, accountRef });
-    return res.status(200).json({ ResultCode: 0, ResultDesc: "No action taken" });
-  } catch (err) {
-    console.error("Error in /payment-confirmed:", err);
-    return res.status(200).json({ ResultCode: 0, ResultDesc: "Error handled" });
+  } 
+  else {
+    console.log("❌ Payment FAILED for:", phoneNumber);
   }
+
+  res.status(200).send("OK");
 });
 
-// Debug endpoint
-app.get("/_pending", (req, res) => {
-  res.json(pending);
+// ===============================
+// 5. SERVE FRONTEND
+// ===============================
+app.get('/', (req, res) => {
+  res.sendFile(path.join(__dirname, 'index.html'));
 });
 
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+// ===============================
+// 6. START SERVER
+// ===============================
+app.listen(process.env.PORT || 3000, () => {
+  console.log(`🚀 Server running on port ${process.env.PORT || 3000}`);
 });
