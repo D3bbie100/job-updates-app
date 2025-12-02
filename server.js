@@ -59,7 +59,7 @@ app.post("/subscribe", async (req, res) => {
     const accountRef = genRef();
     pending[accountRef] = { name, email, phone, industry, createdAt: Date.now() };
 
-    const amount = Number(process.env.SUBSCRIPTION_AMOUNT || 100);
+    const amount = 100;
 
     // Daraja config
     const shortcode = process.env.MPESA_SHORTCODE;
