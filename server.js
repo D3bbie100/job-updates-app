@@ -116,6 +116,7 @@ app.post("/subscribe", async (req, res) => {
     // Daraja config
     const shortcode = process.env.MPESA_SHORTCODE;
     const passkey = process.env.MPESA_PASSKEY;
+    const callbackBase = process.env.MPESA_CALLBACK_BASE || "https://job-updates-app.onrender.com";
 
     if (!shortcode || !passkey) {
       console.error("❌ Missing SHORTCODE/PASSKEY");
@@ -138,7 +139,7 @@ app.post("/subscribe", async (req, res) => {
       PartyA: phone,
       PartyB: shortcode,
       PhoneNumber: phone,
-      CallBackURL: process.env.MPESA_CALLBACK_URL,
+      CallBackURL: '${callbackBase}/payment-confirmed',
       AccountReference: accountRef,
       TransactionDesc: `Subscription (${industry})`,
     };
