@@ -87,7 +87,7 @@ app.post("/subscribe", async (req, res) => {
       PhoneNumber: phone,
       CallBackURL: `${callbackBase}/payment-confirmed`,
       AccountReference: accountRef,
-      TransactionDesc: `Subscription (${industry})`,
+      TransactionDesc: `Subscription`,
     };
 
     console.log("STK push payload:", { ...payload, Password: "[HIDDEN]" });
