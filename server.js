@@ -1,13 +1,20 @@
-require('dotenv').config();
-const express = require('express');
-const axios = require('axios');
-const bodyParser = require('body-parser');
-const path = require('path');
+import dotenv from 'dotenv';
+import express from 'express';
+import axios from 'axios';
+import bodyParser from 'body-parser';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+dotenv.config();
+
+// Needed to handle __dirname in ES modules
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const app = express();
 app.use(bodyParser.json());
 
-// 🔹 Simple temporary storage (replace with DB in production)
+// Temporary storage
 const pendingPayments = new Map();
 
 // ===============================
@@ -41,7 +48,6 @@ app.post('/stkpush', async (req, res) => {
       return res.status(400).json({ error: "Phone number required" });
     }
 
-    // 🔹 Store subscriber details temporarily
     pendingPayments.set(phone, { name, email, industry });
 
     const accessToken = await getAccessToken();
@@ -56,7 +62,7 @@ app.post('/stkpush', async (req, res) => {
       Password: password,
       Timestamp: timestamp,
       TransactionType: 'CustomerBuyGoodsOnline',
-      Amount: 10,
+      Amount: 100,
       PartyA: phone,
       PartyB: '6976785',
       PhoneNumber: phone,
@@ -74,7 +80,7 @@ app.post('/stkpush', async (req, res) => {
     res.json(stkRes.data);
 
   } catch (err) {
-    console.error("❌ STK Push Error:", err.response?.data || err.message);
+    console.error("STK Push Error:", err.response?.data || err.message);
     res.status(500).json({ error: 'STK Push failed' });
   }
 });
@@ -109,38 +115,34 @@ const addUserToMailerLite = async (email, name, industry, phone) => {
 app.post('/callback', async (req, res) => {
   const callback = req.body.Body.stkCallback;
 
-  console.log("📩 M-Pesa Callback:", JSON.stringify(callback, null, 2));
+  console.log("M-Pesa Callback:", JSON.stringify(callback, null, 2));
 
   const resultCode = callback.ResultCode;
-
-  const phoneNumber = callback.CallbackMetadata?.Item?.find(i => i.Name === 'PhoneNumber')?.Value;
+  const phoneNumber =
+    callback.CallbackMetadata?.Item?.find(i => i.Name === 'PhoneNumber')?.Value;
 
   if (!phoneNumber) {
-    console.log("⚠️ No phone number in callback.");
+    console.log("Callback missing phone number");
     return res.status(200).send("OK");
   }
 
-  // =======================================
-  // 🔹 SUCCESSFUL PAYMENT
-  // =======================================
   if (resultCode === 0) {
-    console.log("✅ Payment success for:", phoneNumber);
+    console.log("Payment success for:", phoneNumber);
 
     const user = pendingPayments.get(phoneNumber);
 
     if (user) {
       try {
         await addUserToMailerLite(user.email, user.name, user.industry, phoneNumber);
-        console.log(`📧 Added to MailerLite: ${user.email}`);
+        console.log("Added to MailerLite:", user.email);
       } catch (err) {
-        console.log("❌ MailerLite Error:", err.response?.data || err.message);
+        console.log("MailerLite Error:", err.response?.data || err.message);
       }
 
-      pendingPayments.delete(phoneNumber); // cleanup
+      pendingPayments.delete(phoneNumber);
     }
-  } 
-  else {
-    console.log("❌ Payment FAILED for:", phoneNumber);
+  } else {
+    console.log("Payment failed for:", phoneNumber);
   }
 
   res.status(200).send("OK");
@@ -157,5 +159,5 @@ app.get('/', (req, res) => {
 // 6. START SERVER
 // ===============================
 app.listen(process.env.PORT || 3000, () => {
-  console.log(`🚀 Server running on port ${process.env.PORT || 3000}`);
+  console.log(`Server running on port ${process.env.PORT || 3000}`);
 });
