@@ -80,7 +80,7 @@ app.post("/subscribe", async (req, res) => {
       TransactionType: 'CustomerBuyGoodsOnline',
       Amount: 100,
       PartyA: phone,
-      PartyB: shortcode,
+      PartyB: '6976785',
       PhoneNumber: phone,
       CallBackURL: process.env.MPESA_CALLBACK_URL,
       AccountReference: accountRef,
