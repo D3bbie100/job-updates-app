@@ -16,6 +16,30 @@ const __dirname = path.dirname(__filename);
 app.use(bodyParser.json());
 app.use(express.static("."));
 
+
+// ------------------------- LOG HELPERS -------------------------
+
+// Log potential unsafe characters (helps identify WAF triggers)
+function checkForUnsafeCharacters(payload) {
+  Object.entries(payload).forEach(([key, value]) => {
+    if (typeof value === "string" && /[^a-zA-Z0-9\-_\s()./]/.test(value)) {
+      console.warn(`⚠️ POSSIBLE UNSAFE CHARACTERS detected in ${key}:`, value);
+    }
+  });
+}
+
+// Log full Safaricom error response
+async function logFetchError(err) {
+  if (err.name === "FetchError") {
+    console.error("FETCH ERROR:", err);
+    return;
+  }
+  console.error("Error:", err);
+}
+
+// ----------------------------------------------------------------
+
+
 // In-memory pending store (replace with DB in production)
 const pending = {}; // { reference: { name, email, phone, industry, createdAt } }
 
@@ -24,118 +48,192 @@ function genRef() {
   return "REF-" + crypto.randomBytes(6).toString("hex");
 }
 
-// Daraja: get access token
+
+// ---------------------- DARAJA TOKEN ----------------------
+
 async function getMpesaToken() {
   const consumerKey = process.env.MPESA_CONSUMER_KEY;
   const consumerSecret = process.env.MPESA_CONSUMER_SECRET;
+
+  console.log("🔍 Getting MPESA token…");
   if (!consumerKey || !consumerSecret) {
+    console.error("❌ Missing MPESA_CONSUMER_* values");
     throw new Error("Missing MPESA_CONSUMER_KEY or MPESA_CONSUMER_SECRET in env");
   }
+
   const auth = Buffer.from(`${consumerKey}:${consumerSecret}`).toString("base64");
-  const url = process.env.MPESA_OAUTH_URL || "https://api.safaricom.co.ke/oauth/v1/generate?grant_type=client_credentials";
-  const res = await fetch(url, { headers: { Authorization: `Basic ${auth}` } });
+  const url =
+    process.env.MPESA_OAUTH_URL ||
+    "https://api.safaricom.co.ke/oauth/v1/generate?grant_type=client_credentials";
+
+  console.log("🔍 OAuth Request →", url);
+
+  const res = await fetch(url, {
+    headers: { Authorization: `Basic ${auth}` },
+  }).catch((err) => {
+    console.error("❌ TOKEN FETCH FAILED:", err);
+    throw err;
+  });
+
+  console.log("🔍 OAuth Response Status:", res.status);
+
   if (!res.ok) {
     const txt = await res.text();
+    console.error("❌ OAuth Error Body:", txt);
     throw new Error("Failed to get token: " + txt);
   }
+
   const data = await res.json();
+  console.log("✅ Token acquired");
   return data.access_token;
 }
 
-// Serve form (root index.html)
+
+// ---------------------- SERVE HTML ----------------------
+
 app.get("/", (req, res) => {
   res.sendFile(path.join(__dirname, "index.html"));
 });
 
-// POST /subscribe -> triggers STK push (Daraja)
+
+// ---------------------- STK PUSH ----------------------
+
 app.post("/subscribe", async (req, res) => {
   try {
+    console.log("\n\n============================");
+    console.log("📥 /subscribe payload:", req.body);
+    console.log("============================\n");
+
     const { name, email, phone, industry } = req.body;
     if (!name || !email || !phone || !industry) {
       return res.status(400).json({ message: "Missing required fields" });
     }
 
-    // Generate ref and store pending
+    // Generate ref
     const accountRef = genRef();
     pending[accountRef] = { name, email, phone, industry, createdAt: Date.now() };
 
     // Daraja config
     const shortcode = process.env.MPESA_SHORTCODE;
     const passkey = process.env.MPESA_PASSKEY;
+
     if (!shortcode || !passkey) {
-      return res.status(500).json({ message: "MPESA_SHORTCODE or MPESA_PASSKEY not set in environment" });
+      console.error("❌ Missing SHORTCODE/PASSKEY");
+      return res.status(500).json({ message: "MPESA_SHORTCODE or MPESA_PASSKEY not set" });
     }
 
-    // Get access token
+    // Get token
     const token = await getMpesaToken();
 
-    // Timestamp format YYYYMMDDHHmmss
+    // Timestamp + password
     const timestamp = new Date().toISOString().replace(/[^0-9]/g, "").slice(0, 14);
-    const password = Buffer.from(shortcode + passkey + timestamp).toString('base64');
+    const password = Buffer.from(shortcode + passkey + timestamp).toString("base64");
 
     const payload = {
       BusinessShortCode: shortcode,
       Password: password,
       Timestamp: timestamp,
-      TransactionType: 'CustomerBuyGoodsOnline',
+      TransactionType: "CustomerBuyGoodsOnline",
       Amount: 100,
       PartyA: phone,
-      PartyB: '6976785',
+      PartyB: shortcode,
       PhoneNumber: phone,
       CallBackURL: process.env.MPESA_CALLBACK_URL,
       AccountReference: accountRef,
-      TransactionDesc: 'Subscription (${industry})',
+      TransactionDesc: `Subscription (${industry})`,
     };
 
-    console.log("STK push payload:", { ...payload, Password: "[HIDDEN]" });
+    // Show payload with hidden password
+    console.log("\n📤 STK Payload:");
+    console.log(JSON.stringify({ ...payload, Password: "[HIDDEN]" }, null, 2));
 
-    const stkRes = await fetch(process.env.MPESA_STK_URL || "https://api.safaricom.co.ke/mpesa/stkpush/v1/processrequest", {
+    // Check for unsafe characters (debugging 400.002.02)
+    checkForUnsafeCharacters(payload);
+
+    const url =
+      process.env.MPESA_STK_URL ||
+      "https://api.safaricom.co.ke/mpesa/stkpush/v1/processrequest";
+
+    console.log("🔍 Sending STK push →", url);
+
+    const stkRes = await fetch(url, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${token}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify(payload),
+    }).catch((err) => {
+      console.error("❌ STK FETCH FAIL:", err);
+      throw err;
     });
 
-    const stkData = await stkRes.json().catch(() => null);
-    console.log("STK response:", stkData);
+    console.log("🔍 STK Response Status:", stkRes.status);
+
+    const rawText = await stkRes.text();
+    console.log("📥 Raw STK response:", rawText);
+
+    let stkData = null;
+    try {
+      stkData = JSON.parse(rawText);
+    } catch (e) {
+      console.warn("⚠️ STK response JSON parse failed");
+    }
 
     return res.json({
       status: "pending",
-      message: "M-PESA payment prompt sent to your phone. Confirm to complete subscription.",
+      message:
+        "M-PESA payment prompt sent to your phone. Confirm to complete subscription.",
       reference: accountRef,
-      stk: stkData || null,
+      stk: stkData,
     });
+
   } catch (err) {
-    console.error("Error /subscribe:", err);
-    return res.status(500).json({ message: "Failed to initiate payment", error: err.message });
+    console.error("❌ ERROR /subscribe:", err);
+    await logFetchError(err);
+
+    return res.status(500).json({
+      message: "Failed to initiate payment",
+      error: err.message,
+    });
   }
 });
 
-// POST /payment-confirmed -> M-PESA callback
+
+// ---------------------- CALLBACK ----------------------
+
 app.post("/payment-confirmed", async (req, res) => {
   try {
-    console.log("Payment callback received:", JSON.stringify(req.body).slice(0, 2000));
+    console.log("\n\n========== CALLBACK RECEIVED ==========");
+    console.log(JSON.stringify(req.body, null, 2).slice(0, 5000));
+    console.log("=======================================\n\n");
+
     const body = req.body;
     const stkCallback = body?.Body?.stkCallback;
-    if (!stkCallback) {
-      // Some providers may POST different payloads; acknowledge to avoid retries
-      return res.status(200).json({ result: "no-stk-callback-present" });
-    }
+    if (!stkCallback) return res.status(200).json({ result: "no-stk-callback-present" });
 
     const resultCode = stkCallback.ResultCode;
     const items = stkCallback?.CallbackMetadata?.Item || [];
 
     const accountRefItem = items.find((it) => it.Name === "AccountReference");
-    const phoneItem = items.find((it) => it.Name === "PhoneNumber" || it.Name === "MSISDN");
+    const phoneItem =
+      items.find((it) => it.Name === "PhoneNumber" || it.Name === "MSISDN");
     const amountItem = items.find((it) => it.Name === "Amount");
-    const receiptItem = items.find((it) => it.Name === "MpesaReceiptNumber" || it.Name === "ReceiptNumber");
+    const receiptItem =
+      items.find((it) => it.Name === "MpesaReceiptNumber" || it.Name === "ReceiptNumber");
 
-    const accountRef = accountRefItem?.Value || stkCallback?.CheckoutRequestID || null;
-    const payerPhone = phoneItem?.Value || null;
-    const amount = amountItem?.Value || null;
-    const receipt = receiptItem?.Value || null;
+    const accountRef = accountRefItem?.Value || stkCallback?.CheckoutRequestID;
+    const payerPhone = phoneItem?.Value;
+    const amount = amountItem?.Value;
+    const receipt = receiptItem?.Value;
+
+    console.log("🔍 Parsed callback:", {
+      resultCode,
+      accountRef,
+      payerPhone,
+      amount,
+      receipt,
+    });
 
     if (resultCode === 0 && accountRef && pending[accountRef]) {
       const entry = pending[accountRef];
@@ -145,11 +243,13 @@ app.post("/payment-confirmed", async (req, res) => {
       const groupId = process.env[key] || process.env.MAILERLITE_DEFAULT_GROUP;
 
       const mlPayload = {
-        email: email,
-        name: name,
+        email,
+        name,
         fields: { phone: payerPhone || "" },
       };
       if (groupId) mlPayload.groups = [groupId];
+
+      console.log("📤 Sending to MailerLite:", mlPayload);
 
       try {
         const mlRes = await fetch("https://connect.mailerlite.com/api/subscribers", {
@@ -160,31 +260,35 @@ app.post("/payment-confirmed", async (req, res) => {
           },
           body: JSON.stringify(mlPayload),
         });
-        const mlText = await mlRes.text();
-        console.log("MailerLite result:", mlRes.status, mlText);
+        console.log("📩 MailerLite status:", mlRes.status);
+        console.log("📩 MailerLite body:", await mlRes.text());
       } catch (e) {
-        console.error("MailerLite API error:", e);
+        console.error("❌ MailerLite error:", e);
       }
 
-      // Remove pending entry
       delete pending[accountRef];
-
       return res.status(200).json({ ResultCode: 0, ResultDesc: "Processed" });
     }
 
-    console.warn("Callback not processed:", { resultCode, accountRef });
+    console.warn("⚠️ Callback not processed:", { resultCode, accountRef });
     return res.status(200).json({ ResultCode: 0, ResultDesc: "No action taken" });
+
   } catch (err) {
-    console.error("Error in /payment-confirmed:", err);
+    console.error("❌ ERROR in /payment-confirmed:", err);
     return res.status(200).json({ ResultCode: 0, ResultDesc: "Error handled" });
   }
 });
 
-// Debug endpoint
+
+// ---------------------- DEBUG ----------------------
+
 app.get("/_pending", (req, res) => {
   res.json(pending);
 });
 
+
+// ---------------------- START ----------------------
+
 app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+  console.log(`🚀 Server running on port ${PORT}`);
 });
