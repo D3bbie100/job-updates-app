@@ -140,9 +140,9 @@ app.post("/subscribe", async (req, res) => {
       TransactionType: 'CustomerBuyGoodsOnline',
       Amount: 100,
       PartyA: phone,
-      PartyB: shortcode,
+      PartyB: '6976785',
       PhoneNumber: phone,
-      CallBackURL: '${callbackBase}/paymentconfirmed',
+      CallBackURL: process.env.MPESA_CALLBACK_URL,
       AccountReference: accountRef,
       TransactionDesc: `Subscription (${industry})`,
     };
@@ -206,7 +206,7 @@ app.post("/subscribe", async (req, res) => {
 
 // ---------------------- CALLBACK ----------------------
 
-app.post("/paymentconfirmed", async (req, res) => {
+app.post("/callback", async (req, res) => {
   try {
     console.log("\n\n========== CALLBACK RECEIVED ==========");
     console.log(JSON.stringify(req.body, null, 2).slice(0, 5000));
@@ -278,7 +278,7 @@ app.post("/paymentconfirmed", async (req, res) => {
     return res.status(200).json({ ResultCode: 0, ResultDesc: "No action taken" });
 
   } catch (err) {
-    console.error("❌ ERROR in /paymentconfirmed:", err);
+    console.error("❌ ERROR in /callback:", err);
     return res.status(200).json({ ResultCode: 0, ResultDesc: "Error handled" });
   }
 });
