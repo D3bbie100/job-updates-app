@@ -134,7 +134,7 @@ app.post("/subscribe", async (req, res) => {
     ).toString('base64');
 
     const payload = {
-      BusinessShortCode: shortcode,
+      BusinessShortCode: process.env.MPESA_SHORTCODE,
       Password: password,
       Timestamp: timestamp,
       TransactionType: 'CustomerBuyGoodsOnline',
