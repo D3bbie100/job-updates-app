@@ -127,19 +127,22 @@ app.post("/subscribe", async (req, res) => {
     const token = await getMpesaToken();
 
     // Timestamp + password
-    const timestamp = new Date().toISOString().replace(/[^0-9]/g, "").slice(0, 14);
-    const password = Buffer.from(shortcode + passkey + timestamp).toString("base64");
+    const timestamp = new Date().toISOString().replace(/[^0-9]/g, '').slice(0, 14);
+
+    const password = Buffer.from(
+      process.env.MPESA_SHORTCODE + process.env.MPESA_PASSKEY + timestamp
+    ).toString('base64');
 
     const payload = {
       BusinessShortCode: shortcode,
       Password: password,
       Timestamp: timestamp,
-      TransactionType: "CustomerBuyGoodsOnline",
+      TransactionType: 'CustomerBuyGoodsOnline',
       Amount: 100,
       PartyA: phone,
       PartyB: shortcode,
       PhoneNumber: phone,
-      CallBackURL: '${callbackBase}/payment-confirmed',
+      CallBackURL: '${callbackBase}/paymentconfirmed',
       AccountReference: accountRef,
       TransactionDesc: `Subscription (${industry})`,
     };
@@ -203,7 +206,7 @@ app.post("/subscribe", async (req, res) => {
 
 // ---------------------- CALLBACK ----------------------
 
-app.post("/payment-confirmed", async (req, res) => {
+app.post("/paymentconfirmed", async (req, res) => {
   try {
     console.log("\n\n========== CALLBACK RECEIVED ==========");
     console.log(JSON.stringify(req.body, null, 2).slice(0, 5000));
@@ -275,7 +278,7 @@ app.post("/payment-confirmed", async (req, res) => {
     return res.status(200).json({ ResultCode: 0, ResultDesc: "No action taken" });
 
   } catch (err) {
-    console.error("❌ ERROR in /payment-confirmed:", err);
+    console.error("❌ ERROR in /paymentconfirmed:", err);
     return res.status(200).json({ ResultCode: 0, ResultDesc: "Error handled" });
   }
 });
